@@ -4,9 +4,9 @@
 #
 # Description:
 # The 'Eses Image Adjustments V2' node offers a suite of tools
-# for image post-processing within ComfyUI. It allows users to fine-tune 
-# various aspects of their images, applying effects in a sequential pipeline. 
-# This version leverages PyTorch for all image processing, ensuring GPU 
+# for image post-processing within ComfyUI. It allows users to fine-tune
+# various aspects of their images, applying effects in a sequential pipeline.
+# This version leverages PyTorch for all image processing, ensuring GPU
 # acceleration and efficient tensor operations.
 #
 # Key Features:
@@ -37,12 +37,17 @@
 #   - Grain Contrast: Adjusts the contrast of the grain for more pronounced or subtle effects.
 #   - Color Grain Mix: Blends between monochromatic and colored grain.
 #
+# - Masking (new in 1.1.0):
+#   - Use Mask: Applies adjustments only to the white areas of the mask.
+#   - Invert Mask Influence: Inverts the mask effect, applying adjustments to black areas.
+#   - Mask Influence: Controls the strength of the mask's effect on adjustments (0-100).
+#
 # Usage:
 # Connect your image tensor to the 'image' input. Adjust parameters
 # as needed. The node outputs the 'adjusted_image' tensor, maintaining
 # compatibility with other ComfyUI nodes.
 #
-# Version: 1.0.0
+# Version: 1.1.0
 # License: -
 #
 # ==========================================================================
@@ -240,7 +245,7 @@ def apply_color_gel_tensor(image_tensor: torch.Tensor, gel_color_str: str, gel_s
         return image_tensor
 
     gel_color_tensor = parse_color_string_to_tensor(gel_color_str, image_tensor.device, image_tensor.dtype) # (3,)
-    
+
     # Broadcast gel_color_tensor to match image_tensor shape for multiplication
     gel_color_broadcast = gel_color_tensor.view(1, 1, 1, 3) # (1, 1, 1, 3)
 
@@ -334,7 +339,7 @@ class EsesImageAdjustments2:
         return {
             "required": {
                 "image": ("IMAGE",), # (B, H, W, C) tensor
-                
+
                 # Global Tonal Adjustments
                 "contrast": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "gamma": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 5.0, "step": 0.01}),
@@ -345,7 +350,7 @@ class EsesImageAdjustments2:
                 "r_offset": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 1.0}),
                 "g_offset": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 1.0}),
                 "b_offset": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 1.0}),
-                
+
                 # Creative Effects
                 "gel_color": ("STRING", {"default": "255,200,0", "multiline": False}),
                 "gel_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
@@ -363,13 +368,16 @@ class EsesImageAdjustments2:
             },
             "optional": {
                 "mask": ("MASK",),
+                "use_mask": ("BOOLEAN", {"default": False}),
+                "invert_mask_influence": ("BOOLEAN", {"default": False}),
+                "mask_influence": ("FLOAT", {"default": 100.0, "min": 0.0, "max": 100.0, "step": 1.0}),
             }
         }
 
     RETURN_TYPES = ("IMAGE", "MASK",)
-    RETURN_NAMES = ("ADJUSTED_IMAGE", "ORIGINAL_MASK",)
+    RETURN_NAMES = ("ADJUSTED_IMAGE", "OUTPUT_MASK",)
     FUNCTION = "adjust_image"
-    CATEGORY = "Eses Nodes/Image Adjustments" # Category remains the same, but the node name will be new
+    CATEGORY = "Eses Nodes/Image Adjustments"
 
     def adjust_image(self, image: torch.Tensor, mask=None,
                      # Tonal Adjustments
@@ -384,34 +392,62 @@ class EsesImageAdjustments2:
                      # B&W
                      grayscale=False,
                      # Grain
-                     grain_strength=0.0, grain_contrast=1.0, color_grain_mix=1.0):
+                     grain_strength=0.0, grain_contrast=1.0, color_grain_mix=1.0,
+                     # Masking
+                     use_mask=False, invert_mask_influence=False, mask_influence=100.0):
 
-        # Input image is (B, H, W, C)
-        current_image_tensor = image # Start with the input tensor
+        original_image_tensor = image # Keep a copy of the original image
+        current_image_tensor = image # Start with the input tensor for adjustments
 
-        # Base Tonal Adjustments
+        # Apply all adjustments sequentially
         current_image_tensor = adjust_contrast_tensor(current_image_tensor, contrast)
         current_image_tensor = adjust_gamma_tensor(current_image_tensor, gamma)
         current_image_tensor = adjust_saturation_tensor(current_image_tensor, saturation)
-        
-        # Color Adjustments
+
         current_image_tensor = adjust_hue_rotation_tensor(current_image_tensor, hue_rotation)
         current_image_tensor = adjust_color_balance_tensor(current_image_tensor, r_offset, g_offset, b_offset)
-        
-        # Creative Effects
+
         current_image_tensor = apply_color_gel_tensor(current_image_tensor, gel_color, gel_strength)
 
-        # Sharpness
         current_image_tensor = adjust_sharpness_tensor(current_image_tensor, sharpness)
-        
-        # Grayscale
+
         if grayscale:
             current_image_tensor = convert_to_grayscale_tensor(current_image_tensor)
-        
-        # Grain
+
         current_image_tensor = add_film_grain_tensor(current_image_tensor, grain_strength, grain_contrast, color_grain_mix)
 
-        # The final output is already a batch tensor
-        adjusted_image_tensor = current_image_tensor
+        output_mask = None # Initialize output mask
 
-        return (adjusted_image_tensor, mask,)
+        if use_mask and mask is not None:
+            processed_mask = mask.unsqueeze(-1)
+
+            if invert_mask_influence:
+                processed_mask = 1.0 - processed_mask
+
+            # Convert mask_influence (0-100) to a blend factor (0-1)
+            influence_factor = mask_influence / 100.0
+
+            # Calculate the blend weight for the image.
+            # When influence_factor is 0 (mask_influence 0%), mask_blend_weight should be 1.0 (effect everywhere).
+            # When influence_factor is 1 (mask_influence 100%), mask_blend_weight should be processed_mask (effect only on mask).
+            image_blend_weight = torch.lerp(torch.tensor(1.0, device=processed_mask.device, dtype=processed_mask.dtype),
+                                            processed_mask,
+                                            influence_factor)
+
+            # Alpha blend for the image
+            adjusted_image_tensor = torch.lerp(original_image_tensor, current_image_tensor, image_blend_weight)
+
+            # The output mask should also reflect this fade effect
+            # Unsqueeze if needed to match image_blend_weight dimensions for consistency, then squeeze for output
+            output_mask = image_blend_weight.squeeze(-1) if image_blend_weight.dim() > 3 else image_blend_weight
+        else:
+            adjusted_image_tensor = current_image_tensor
+            # If mask is not used, the output mask should be a full white mask (no restriction)
+            # Match the batch size and dimensions of the input image for the output mask.
+            if image is not None:
+                output_mask = torch.ones_like(image[:, :, :, 0]) # (B, H, W)
+            else:
+                output_mask = None
+
+
+        return (adjusted_image_tensor, output_mask,)
