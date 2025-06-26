@@ -47,8 +47,8 @@
 # as needed. The node outputs the 'adjusted_image' tensor, maintaining
 # compatibility with other ComfyUI nodes.
 #
-# Version: 1.1.0
-# License: -
+# Version: 1.1.1
+# License: See LICENSE.txt
 #
 # ==========================================================================
 
@@ -375,7 +375,7 @@ class EsesImageAdjustments2:
         }
 
     RETURN_TYPES = ("IMAGE", "MASK",)
-    RETURN_NAMES = ("ADJUSTED_IMAGE", "OUTPUT_MASK",)
+    RETURN_NAMES = ("adjusted_image", "output_mask",)
     FUNCTION = "adjust_image"
     CATEGORY = "Eses Nodes/Image Adjustments"
 
