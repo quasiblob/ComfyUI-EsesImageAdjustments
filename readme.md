@@ -2,6 +2,11 @@
 
 ![Eses Image Adjustments Node Screenshot](docs/image_adjustments.png)
 
+
+> [!CAUTION]
+> Before dowloading and using the contents of this repository, please read the LICENSE.txt and the disclaimer - Thank you!
+
+
 ## Description
 
 The 'Eses Image Adjustments' is a ComfyUI custom node designed for simple and easy to use image post-processing. It provides a sequential pipeline for fine-tuning various image aspects, utilizing PyTorch for GPU acceleration and efficient tensor operations. If you want a node with minimal dependecies, and don't want to download ten nodes to get images adjustment features, then give this one a try! 
