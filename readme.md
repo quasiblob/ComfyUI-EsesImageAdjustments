@@ -4,19 +4,22 @@
 
 
 > [!CAUTION]
-> Before dowloading and using the contents of this repository, please read the LICENSE.txt and the disclaimer.
-> If you do not respect my efforts, then these tool may not be available in the future (I will report misuse) - Thank you!
+> Before downloading and using the contents of this repository, please review the LICENSE.txt and the disclaimer.
+> I kindly ask that you respect the licensing terms and the effort put into these tools to ensure their 
+> continued availability for everyone. Thank you!
 
 
 ## Description
 
-The 'Eses Image Adjustments' is a ComfyUI custom node designed for simple and easy to use image post-processing. It provides a sequential pipeline for fine-tuning various image aspects, utilizing PyTorch for GPU acceleration and efficient tensor operations. If you want a node with minimal dependecies, and don't want to download ten nodes to get images adjustment features, then give this one a try! 
+The 'Eses Image Adjustments' is a ComfyUI custom node designed for simple and easy to use image post-processing. It provides a sequential pipeline for fine-tuning various image aspects, utilizing PyTorch for GPU acceleration and efficient tensor operations. 
+
+👉 If you want a node with minimal dependecies, and don't want to download ten nodes to get images adjustment features, then why not give this node a try?
 
 💡 This is not a replacement for separate image adjustment nodes, as you can't reorder operations here (these are done pretty much in order you see the UI elements). 
 
 💡 This node is meant for quick and easy to use color adjustments. 
 
-🎞️ Film grain is relatively fast (mainly the reason I put this together), 4000x6000 pixels image takes ~2-3 seconds to process.
+🎞️ Film grain is relatively fast (mainly the reason I put this together) - example: a 4000x6000 pixels image takes ~2-3 seconds to process.
 
 
 ## Features
@@ -36,6 +39,11 @@ The 'Eses Image Adjustments' is a ComfyUI custom node designed for simple and ea
 * **Sharpness**:
     * **Sharpness**: Adjusts the overall sharpness of the image.
 
+* **Unsharp Mask (new)**:
+    * **Unsharp Strength**: Adjusts the overall strength of the sharpening effect.
+    * **Unsharp Blur Radius**: Defines the area that gets affected, think it like blurred copy of the original image acting as a mask.
+    * **Unsharp Threshold**: How small value differences are considered as edge.
+
 * **Black & White Conversion**:
     * **Grayscale**: Converts the image to black and white with a single toggle.
 
@@ -47,8 +55,8 @@ The 'Eses Image Adjustments' is a ComfyUI custom node designed for simple and ea
 
 ## Requirements
 
-* Python >= 3.9  (tested only with Python 3.12)
-* PyTorch (you should have this if you have ComfyUI installed.)
+* Tested only with Python 3.12
+* PyTorch (you should have this if you have ComfyUI installed)
 
 
 ## Installation
@@ -76,7 +84,8 @@ ComfyUI-EsesImageAdjustments/
 ├── image_adjustsments_2.py # The Python file containing the node logic.
 ├── README.md               # This file.
 ├── requirements.txt        # Python package dependencies.
-└── docs/                   # Optional documentation assets (images, etc.)
+├── LICENSE.txt             # You should read this before using this node.
+└── docs/                   # Documentation assets.
 ```
 
 
@@ -105,8 +114,11 @@ Eses Nodes/Image Adjustments
 
 ## Update History
 
-* 2025.6.27 Version 1.1.1
-* 2025.6.20 Version 1.0.0 released
+* **2025.7.10 Version 1.2.0** Added support for Unsharp Mask effect (this one uses CPU instead of GPU for now)
+
+* **2025.6.27 Version 1.1.1** Added masking support
+
+* **2025.6.20 Version 1.0.0** released
 
 
 ## ⚠️Disclaimer⚠️

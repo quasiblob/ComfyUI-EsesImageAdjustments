@@ -4,10 +4,10 @@
 #
 # Description:
 # The 'Eses Image Adjustments V2' node offers a suite of tools
-# for image post-processing within ComfyUI. It allows users to fine-tune
-# various aspects of their images, applying effects in a sequential pipeline.
-# This version leverages PyTorch for all image processing, ensuring GPU
-# acceleration and efficient tensor operations.
+# for image post-processing within ComfyUI. It allows fine-tuning of
+# various aspects of images. It applies effects in sequential order.
+# This version leverages PyTorch for all image processing (except for unsharp
+# mask operation), ensuring GPU acceleration and efficient tensor operations. 
 #
 # Key Features:
 #
@@ -28,6 +28,8 @@
 #
 # - Sharpness:
 #   - Sharpness: Adjusts the overall sharpness of the image.
+#   - Unsharp Mask: Adds sharpening using the Pillow (PIL) unsharp mask algorithm
+#     with controls for radius, strength (percent), and threshold.
 #
 # - Black & White Conversion:
 #   - Grayscale: Easily converts the image to black and white.
@@ -47,7 +49,7 @@
 # as needed. The node outputs the 'adjusted_image' tensor, maintaining
 # compatibility with other ComfyUI nodes.
 #
-# Version: 1.1.1
+# Version: 1.2.0
 # License: See LICENSE.txt
 #
 # ==========================================================================
@@ -55,12 +57,19 @@
 import torch
 import re
 import torch.nn.functional as F
+import numpy as np
+from PIL import Image, ImageFilter
 
-# --- Helper Functions for Image Adjustments (PyTorch-based) ---
+
+# Helper Functions for Image Adjustments ----
 
 # Helper to clamp values to [0, 1] for image tensors
 def clamp_image_tensor(tensor: torch.Tensor) -> torch.Tensor:
     return torch.clamp(tensor, 0.0, 1.0)
+
+
+
+# Image Adjustments --------
 
 def parse_color_string_to_tensor(color_str: str, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
     """Parses a hex (#RRGGBB) or RGB comma-separated (R,G,B) string into an (R, G, B) tensor (0-1 range)."""
@@ -79,6 +88,7 @@ def parse_color_string_to_tensor(color_str: str, device: torch.device, dtype: to
 
     # Try RGB comma-separated format: R,G,B
     parts = color_str.split(',')
+    
     if len(parts) == 3:
         try:
             r = float(parts[0].strip())
@@ -89,12 +99,14 @@ def parse_color_string_to_tensor(color_str: str, device: torch.device, dtype: to
             g = max(0.0, min(255.0, g)) / 255.0
             b = max(0.0, min(255.0, b)) / 255.0
             return torch.tensor([r, g, b], device=device, dtype=dtype)
+        
         except ValueError:
             pass # Fall through to default
 
     # Default to white (1.0, 1.0, 1.0) if parsing fails
     print(f"Warning: Could not parse color string '{color_str}'. Defaulting to white (1.0,1.0,1.0) tensor.")
     return torch.tensor([1.0, 1.0, 1.0], device=device, dtype=dtype)
+
 
 def adjust_contrast_tensor(image_tensor: torch.Tensor, contrast_factor: float) -> torch.Tensor:
     """Adjusts the contrast of a PyTorch Tensor (B, H, W, C)."""
@@ -106,6 +118,7 @@ def adjust_contrast_tensor(image_tensor: torch.Tensor, contrast_factor: float) -
     adjusted_tensor = mean + (image_tensor - mean) * contrast_factor
     return clamp_image_tensor(adjusted_tensor)
 
+
 def adjust_gamma_tensor(image_tensor: torch.Tensor, gamma_factor: float) -> torch.Tensor:
     """Applies gamma correction to a PyTorch Tensor (B, H, W, C)."""
     if gamma_factor == 1.0:
@@ -113,6 +126,7 @@ def adjust_gamma_tensor(image_tensor: torch.Tensor, gamma_factor: float) -> torc
     # Gamma correction formula: output = input^(1/gamma)
     adjusted_tensor = torch.pow(image_tensor, 1.0 / gamma_factor)
     return clamp_image_tensor(adjusted_tensor)
+
 
 def adjust_saturation_tensor(image_tensor: torch.Tensor, saturation_factor: float) -> torch.Tensor:
     """Adjusts the saturation of a PyTorch Tensor (B, H, W, C)."""
@@ -132,6 +146,7 @@ def adjust_saturation_tensor(image_tensor: torch.Tensor, saturation_factor: floa
     # For oversaturation, blend beyond original (weight > 1)
     adjusted_tensor = torch.lerp(grayscale, image_tensor, saturation_factor)
     return clamp_image_tensor(adjusted_tensor)
+
 
 def adjust_hue_rotation_tensor(image_tensor: torch.Tensor, hue_degrees: float) -> torch.Tensor:
     """Rotates the hue of a PyTorch Tensor (B, H, W, C)."""
@@ -222,8 +237,10 @@ def adjust_hue_rotation_tensor(image_tensor: torch.Tensor, hue_degrees: float) -
 
     return clamp_image_tensor(adjusted_tensor)
 
+
 def adjust_color_balance_tensor(image_tensor: torch.Tensor, r_offset: float, g_offset: float, b_offset: float) -> torch.Tensor:
     """Adjusts the color balance by offsetting R, G, B channels of a PyTorch Tensor (B, H, W, C)."""
+    
     if r_offset == 0.0 and g_offset == 0.0 and b_offset == 0.0:
         return image_tensor
 
@@ -235,12 +252,15 @@ def adjust_color_balance_tensor(image_tensor: torch.Tensor, r_offset: float, g_o
     offsets = torch.tensor([r_offset_norm, g_offset_norm, b_offset_norm], device=image_tensor.device, dtype=image_tensor.dtype)
     # Add offsets, broadcasting across H, W, and B
     adjusted_tensor = image_tensor + offsets
+    
     return clamp_image_tensor(adjusted_tensor)
+
 
 def apply_color_gel_tensor(image_tensor: torch.Tensor, gel_color_str: str, gel_strength: float) -> torch.Tensor:
     """
     Applies a color gel effect to a PyTorch Tensor (B, H, W, C).
     """
+
     if gel_strength == 0.0:
         return image_tensor
 
@@ -255,7 +275,9 @@ def apply_color_gel_tensor(image_tensor: torch.Tensor, gel_color_str: str, gel_s
     # Blend original and multiplied based on strength
     # lerp(start, end, weight) = start * (1 - weight) + end * weight
     adjusted_tensor = torch.lerp(image_tensor, multiplied_tensor, gel_strength)
+    
     return clamp_image_tensor(adjusted_tensor)
+
 
 def adjust_sharpness_tensor(image_tensor: torch.Tensor, sharpness_factor: float) -> torch.Tensor:
     """Adjusts the sharpness of a PyTorch Tensor using a simple convolution with replicate padding."""
@@ -292,7 +314,46 @@ def adjust_sharpness_tensor(image_tensor: torch.Tensor, sharpness_factor: float)
 
     # Permute back to (B, H, W, C)
     adjusted_tensor = adjusted_tensor_permuted.permute(0, 2, 3, 1)
+    
     return clamp_image_tensor(adjusted_tensor)
+
+
+def apply_unsharp_mask_pillow_tensor(image_tensor: torch.Tensor, unsharp_blur_radius: float, unsharp_strength: float, unsharp_threshold: int) -> torch.Tensor:
+    """Applies a Pillow-based unsharp mask to a PyTorch Tensor by converting to/from PIL images."""
+    
+    if unsharp_strength == 0.0 or unsharp_blur_radius == 0.0:
+        return image_tensor
+
+    # Convert strength (e.g., 0-5.0 float) to Pillow's percent (e.g., 0-500 integer)
+    unsharp_percent = int(unsharp_strength * 100)
+    
+    device = image_tensor.device
+    processed_batches = []
+
+    # Process each image in the batch individually since Pillow is CPU-based
+    for i in range(image_tensor.shape[0]):
+        # 1. Convert tensor slice to PIL Image
+        # Tensor (1, H, W, C) [0,1] -> Numpy (H, W, C) [0,255] -> PIL Image
+        slice_tensor = image_tensor[i]
+        image_np = (slice_tensor.cpu().numpy() * 255).astype(np.uint8)
+        pil_image = Image.fromarray(image_np, 'RGB')
+
+        # 2. Apply Unsharp Mask filter
+        sharpened_pil = pil_image.filter(ImageFilter.UnsharpMask(
+            radius=unsharp_blur_radius,
+            percent=unsharp_percent,
+            threshold=unsharp_threshold
+        ))
+
+        # 3. Convert back to tensor
+        # PIL Image -> Numpy (H, W, C) [0,255] -> Tensor (1, H, W, C) [0,1]
+        sharpened_np = np.array(sharpened_pil).astype(np.float32) / 255.0
+        processed_tensor_slice = torch.from_numpy(sharpened_np).unsqueeze(0)
+        processed_batches.append(processed_tensor_slice)
+
+    # Stack the processed slices back into a single tensor on the original device
+    return torch.cat(processed_batches, dim=0).to(device)
+
 
 def convert_to_grayscale_tensor(image_tensor: torch.Tensor) -> torch.Tensor:
     """Converts a PyTorch Tensor (B, H, W, C) to grayscale."""
@@ -303,8 +364,10 @@ def convert_to_grayscale_tensor(image_tensor: torch.Tensor) -> torch.Tensor:
     # Replicate the single channel across RGB to make it a 3-channel grayscale image
     return grayscale_tensor.repeat(1, 1, 1, 3)
 
+
 def add_film_grain_tensor(image_tensor: torch.Tensor, grain_strength: float, grain_contrast: float, color_grain_mix: float) -> torch.Tensor:
     """Adds realistic film grain (Gaussian noise) to a PyTorch Tensor (B, H, W, C)."""
+    
     if grain_strength == 0.0:
         return image_tensor
 
@@ -325,10 +388,12 @@ def add_film_grain_tensor(image_tensor: torch.Tensor, grain_strength: float, gra
     blended_noise *= grain_contrast # Apply contrast to the blended noise
 
     noisy_image_tensor = image_tensor + blended_noise
+    
     return clamp_image_tensor(noisy_image_tensor)
 
 
-# --- ComfyUI Node Class ---
+
+# ComfyUI Class ---
 
 class EsesImageAdjustments2:
     def __init__(self):
@@ -357,6 +422,12 @@ class EsesImageAdjustments2:
 
                 # Sharpness
                 "sharpness": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
+
+                # Unsharp Mask (Also sharpness, but more control)
+                "unsharp_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 5.0, "step": 0.01}),
+                "unsharp_blur_radius": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.1}),
+                "unsharp_threshold": ("INT", {"default": 3, "min": 0, "max": 255, "step": 1}),
+
 
                 # B&W
                 "grayscale": ("BOOLEAN", {"default": False}),
@@ -389,6 +460,7 @@ class EsesImageAdjustments2:
                      gel_color="255,200,0", gel_strength=0.0,
                      # Sharpness
                      sharpness=1.0,
+                     unsharp_strength=0.0, unsharp_blur_radius=0.0, unsharp_threshold=3,
                      # B&W
                      grayscale=False,
                      # Grain
@@ -410,6 +482,7 @@ class EsesImageAdjustments2:
         current_image_tensor = apply_color_gel_tensor(current_image_tensor, gel_color, gel_strength)
 
         current_image_tensor = adjust_sharpness_tensor(current_image_tensor, sharpness)
+        current_image_tensor = apply_unsharp_mask_pillow_tensor(current_image_tensor, unsharp_blur_radius, unsharp_strength, unsharp_threshold)
 
         if grayscale:
             current_image_tensor = convert_to_grayscale_tensor(current_image_tensor)
@@ -428,22 +501,25 @@ class EsesImageAdjustments2:
             influence_factor = mask_influence / 100.0
 
             # Calculate the blend weight for the image.
-            # When influence_factor is 0 (mask_influence 0%), mask_blend_weight should be 1.0 (effect everywhere).
-            # When influence_factor is 1 (mask_influence 100%), mask_blend_weight should be processed_mask (effect only on mask).
-            image_blend_weight = torch.lerp(torch.tensor(1.0, device=processed_mask.device, dtype=processed_mask.dtype),
-                                            processed_mask,
-                                            influence_factor)
+            # When influence_factor is 0 (mask_influence 0%), 
+            # mask_blend_weight should be 1.0 (effect everywhere).
+            # When influence_factor is 1 (mask_influence 100%), 
+            # mask_blend_weight should be processed_mask (effect only on mask).
+            image_blend_weight = torch.lerp(torch.tensor(1.0, device=processed_mask.device, dtype=processed_mask.dtype), processed_mask, influence_factor)
 
             # Alpha blend for the image
             adjusted_image_tensor = torch.lerp(original_image_tensor, current_image_tensor, image_blend_weight)
 
             # The output mask should also reflect this fade effect
-            # Unsqueeze if needed to match image_blend_weight dimensions for consistency, then squeeze for output
+            # Unsqueeze if needed to match image_blend_weight dimensions 
+            # for consistency, then squeeze for output
             output_mask = image_blend_weight.squeeze(-1) if image_blend_weight.dim() > 3 else image_blend_weight
         else:
             adjusted_image_tensor = current_image_tensor
-            # If mask is not used, the output mask should be a full white mask (no restriction)
-            # Match the batch size and dimensions of the input image for the output mask.
+            # If mask is not used, the output mask should be 
+            # a full white mask (no restriction)
+            # Match the batch size and dimensions of the 
+            # input image for the output mask.
             if image is not None:
                 output_mask = torch.ones_like(image[:, :, :, 0]) # (B, H, W)
             else:
